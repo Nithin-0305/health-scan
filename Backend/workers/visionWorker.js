@@ -26,92 +26,148 @@ console.log("KEY LENGTH:", process.env.GEMINI_API_KEY?.length);
     const imageBuffer = fs.readFileSync(filePath);
 
     const prompt = `
-You are an AI performing visual analysis of a medical image.
+You are a medical imaging AI.
 
-Describe any visible abnormalities.
+Analyze the medical image and return STRICT JSON only.
 
-Rules:
-- Use cautious language like "may indicate".
-- Do NOT give definitive diagnosis.
-- Return only valid JSON.
-- Choose suspectedRegion from:
-  upper-left, upper-right, center,
-  lower-left, lower-right, diffuse, no-clear-region
-- severity must be: low, moderate, or high.
+Return in this exact format:
 
-Return JSON:
 {
   "observation": "...",
   "possibleInterpretation": "...",
-  "severity": "...",
-  "suspectedRegion": "..."
+  "severity": "low | moderate | high",
+  "suspectedRegion": "upper-left | upper-right | center | lower-left | lower-right | diffuse | no-clear-region",
+  "boundingBox": {
+    "x": number between 0 and 1,
+    "y": number between 0 and 1,
+    "width": number between 0 and 1,
+    "height": number between 0 and 1
+  }
 }
+
+Rules:
+- boundingBox must be relative to image size (percentage, 0 to 1)
+- x and y represent top-left corner of abnormal region
+- width and height represent abnormal region size
+- If no clear abnormality, set suspectedRegion to "no-clear-region" and boundingBox to null
+- Do not return anything outside JSON
 `;
 
-    const result = await model.generateContent([
-      prompt,
-      {
-        inlineData: {
-          mimeType: "image/jpeg",
-          data: imageBuffer.toString("base64")
-        }
-      }
-    ]);
-
-    let text = result.response.text().trim();
-
-    // Remove markdown code block if present
-    if (text.startsWith("```")) {
-    text = text.replace(/```json/g, "")
-                .replace(/```/g, "")
-                .trim();
+const result = await model.generateContent([
+  prompt,
+  {
+    inlineData: {
+      mimeType: "image/jpeg",
+      data: imageBuffer.toString("base64")
     }
+  }
+]);
 
-const parsed = JSON.parse(text);
+let text = result.response.text().trim();
 
+// Remove markdown code blocks if present
+if (text.startsWith("```")) {
+  text = text
+    .replace(/```json/g, "")
+    .replace(/```/g, "")
+    .trim();
+}
 
-    let highlightedPath = null;
+    const parsed = JSON.parse(text);
 
-    if (
-      parsed.suspectedRegion &&
-      parsed.suspectedRegion !== "no-clear-region" &&
-      REGION_MAP[parsed.suspectedRegion]
-    ) {
-      const image = sharp(filePath);
-      const metadata = await image.metadata();
+// Safety
+if (!parsed.boundingBox) {
+  parsed.boundingBox = null;
+}
 
-      const centerX = Math.floor(metadata.width * REGION_MAP[parsed.suspectedRegion].x);
-      const centerY = Math.floor(metadata.height * REGION_MAP[parsed.suspectedRegion].y);
-      const radius = Math.floor(Math.min(metadata.width, metadata.height) * 0.15);
+let highlightedPath = null;
 
-      const svgCircle = `
-        <svg width="${metadata.width}" height="${metadata.height}">
-          <circle cx="${centerX}" cy="${centerY}" r="${radius}"
-            fill="none" stroke="red" stroke-width="5"/>
-        </svg>
-      `;
+const image = sharp(filePath);
+const metadata = await image.metadata();
 
-      const outputDir = path.join(process.cwd(), "uploads", "highlighted");
-      if (!fs.existsSync(outputDir)) {
-        fs.mkdirSync(outputDir);
-      }
+const imageWidth = metadata.width;
+const imageHeight = metadata.height;
 
-      highlightedPath = path.join(
-        "uploads",
-        "highlighted",
-        `${reportId}_highlighted.jpg`
-      );
+let centerX = null;
+let centerY = null;
+let radius = null;
 
-      await image
-        .composite([{ input: Buffer.from(svgCircle), top: 0, left: 0 }])
-        .toFile(path.join(process.cwd(), highlightedPath));
-    }
+// ===================================
+// 1️⃣ PRIORITY: Use boundingBox
+// ===================================
+if (
+  parsed.boundingBox &&
+  typeof parsed.boundingBox.x === "number" &&
+  typeof parsed.boundingBox.y === "number" &&
+  typeof parsed.boundingBox.width === "number" &&
+  typeof parsed.boundingBox.height === "number"
+) {
+  const { x, y, width, height } = parsed.boundingBox;
 
-    await Report.findByIdAndUpdate(reportId, {
-      visionAnalysis: parsed,
-      highlightedImage: highlightedPath
-    });
+  const boxX = x * imageWidth;
+  const boxY = y * imageHeight;
+  const boxW = width * imageWidth;
+  const boxH = height * imageHeight;
 
+  centerX = boxX + boxW / 2;
+  centerY = boxY + boxH / 2;
+
+  // Smaller precise circle
+  radius = Math.min(boxW, boxH) / 2;
+}
+
+// ===================================
+// 2️⃣ FALLBACK: Use REGION_MAP
+// ===================================
+else if (
+  parsed.suspectedRegion &&
+  parsed.suspectedRegion !== "no-clear-region" &&
+  REGION_MAP[parsed.suspectedRegion]
+) {
+  centerX = imageWidth * REGION_MAP[parsed.suspectedRegion].x;
+  centerY = imageHeight * REGION_MAP[parsed.suspectedRegion].y;
+
+  radius = Math.min(imageWidth, imageHeight) * 0.12;
+}
+
+// ===================================
+// DRAW CIRCLE IF WE HAVE LOCATION
+// ===================================
+if (centerX && centerY && radius) {
+
+  const svgCircle = `
+    <svg width="${imageWidth}" height="${imageHeight}">
+      <circle 
+        cx="${centerX}" 
+        cy="${centerY}" 
+        r="${radius}" 
+        fill="none" 
+        stroke="red" 
+        stroke-width="4"/>
+    </svg>
+  `;
+
+  const outputDir = path.join(process.cwd(), "uploads", "highlighted");
+
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
+
+  highlightedPath = path.join(
+    "uploads",
+    "highlighted",
+    `${reportId}_highlighted.jpg`
+  );
+
+  await image
+    .composite([{ input: Buffer.from(svgCircle), top: 0, left: 0 }])
+    .toFile(path.join(process.cwd(), highlightedPath));
+}
+
+await Report.findByIdAndUpdate(reportId, {
+  visionAnalysis: parsed,
+  highlightedImage: highlightedPath
+});
     console.log("Vision analysis completed:", reportId);
 
   } catch (err) {

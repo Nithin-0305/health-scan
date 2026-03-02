@@ -36,25 +36,36 @@ const reportSchema = new mongoose.Schema({
   // -----------------------
   // Vision Analysis (Week 4)
   // -----------------------
-  visionAnalysis: {
-    observation: String,
-    possibleInterpretation: String,
-    severity: {
-      type: String,
-      enum: ['low', 'moderate', 'high']
-    },
-    suspectedRegion: {
-      type: String,
-      enum: [
-        'upper-left',
-        'upper-right',
-        'center',
-        'lower-left',
-        'lower-right',
-        'diffuse',
-        'no-clear-region'
-      ]
-    }
+ visionAnalysis: {
+  observation: String,
+  possibleInterpretation: String,
+  severity: {
+    type: String,
+    enum: ['low', 'moderate', 'high']
+  },
+  suspectedRegion: {
+    type: String,
+    enum: [
+      'upper-left',
+      'upper-right',
+      'center',
+      'lower-left',
+      'lower-right',
+      'diffuse',
+      'no-clear-region'
+    ]
+  },
+  boundingBox: {
+    x: Number,
+    y: Number,
+    width: Number,
+    height: Number
+  }
+},
+
+  brainModelResult: {
+    status: String,
+    segmentedImage: String,
   },
 
   highlightedImage: { type: String },

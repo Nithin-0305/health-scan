@@ -7,7 +7,7 @@ import AnalysisJob from "../models/AnalysisJob.js";
 import Report from "../models/Report.js";
 import { runVisionAnalysis } from "./visionWorker.js";
 import { generatePatientExplanation } from "../services/nlpService.js";
-
+import { runBrainSegmentation } from "../services/brainModelService.js";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 jobQueue.on("process", async (jobId) => {
@@ -79,9 +79,25 @@ jobQueue.on("process", async (jobId) => {
     // =============================
     // STEP 3: VISION ANALYSIS (WEEK 4)
     // =============================
+    // if (report.type === "image") {
+    //   await runVisionAnalysis(report._id, filePath);
+    // }
+
     if (report.type === "image") {
-      await runVisionAnalysis(report._id, filePath);
-    }
+
+  await runVisionAnalysis(report._id, filePath);
+
+  // Check if brain scan
+  const updatedReport = await Report.findById(report._id);
+
+  if (
+    updatedReport.visionAnalysis?.observation
+      ?.toLowerCase()
+      .includes("brain")
+  ) {
+    await runBrainSegmentation(report._id, filePath);
+  }
+}
 
     job.progress = 85;
     await job.save();

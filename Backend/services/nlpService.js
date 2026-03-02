@@ -69,8 +69,20 @@ export async function generatePatientExplanation(report) {
     const genAI = new GoogleGenerativeAI(apiKey);
 
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash",   // use same model as visionWorker
+      model: "gemini-2.5-flash",
     });
+
+    // =========================
+    // Include Brain Model Result (NEW)
+    // =========================
+    let brainSection = "";
+
+    if (report.brainModelResult?.status) {
+      brainSection = `
+BRAIN SEGMENTATION MODEL RESULT:
+Status: ${report.brainModelResult.status}
+`;
+    }
 
     const prompt = `
 You are a medical AI assistant.
@@ -86,6 +98,14 @@ OCR SECTIONS:
 Diagnosis: ${report.ocrSections?.diagnosis || "Not available"}
 Findings: ${report.ocrSections?.findings || "Not available"}
 Impression: ${report.ocrSections?.impression || "Not available"}
+
+${brainSection}
+
+Important rules:
+- If Brain Segmentation status says "Tumor Detected", riskLevel MUST be High.
+- If no tumor detected and severity is low, riskLevel should be Low.
+- Be clear, calm, and patient-friendly.
+- Do not sound alarming unless necessary.
 
 Return STRICT JSON in this format:
 
@@ -103,7 +123,9 @@ Do not include anything outside JSON.
     const response = await result.response;
     const text = response.text();
 
+    // Remove markdown formatting if Gemini adds it
     const cleaned = text.replace(/```json|```/g, "").trim();
+
     const parsed = JSON.parse(cleaned);
 
     return parsed;

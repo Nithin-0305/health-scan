@@ -533,7 +533,7 @@ const sendMessage = async () => {
               {/* ========================= */}
                 {/* SMART OCR DISPLAY */}
                 {/* ========================= */}
-                {report.extractedText &&
+                {/* {report.extractedText &&
                   report.extractedText.length > 30 &&
                   /[a-zA-Z]{3,}/.test(report.extractedText) && (
                     <div className="mt-3">
@@ -550,7 +550,7 @@ const sendMessage = async () => {
                     <div className="mt-3 text-sm text-gray-500 italic">
                       No readable medical text detected in this image.
                     </div>
-                )}
+                )} */}
 
               {/* ========================= */}
               {/* VISION ANALYSIS */}
@@ -577,11 +577,47 @@ const sendMessage = async () => {
                     <strong>Suspected Region:</strong> {report.visionAnalysis.suspectedRegion}
                   </p>
 
-                  {report.highlightedImage && (
+                  {/* {report.highlightedImage && (
                     <div className="mt-4">
                       <img
                         src={`${API_BASE}/${report.highlightedImage.replace(/\\/g, "/")}`}
                         alt="Highlighted"
+                        className="rounded-lg shadow max-w-full"
+                      />
+                    </div>
+                  )} */}
+
+                  {/* Show Gemini highlight only if NO brain segmentation */}
+                {report.highlightedImage && !report.brainModelResult && (
+                  <div className="mt-4">
+                    <img
+                      src={`${API_BASE}/${report.highlightedImage.replace(/\\/g, "/")}`}
+                      alt="Highlighted"
+                      className="rounded-lg shadow max-w-full"
+                    />
+                  </div>
+                )}
+                </div>
+              )}
+
+              {/* ========================= */}
+              {/* BRAIN SEGMENTATION RESULT */}
+              {/* ========================= */}
+              {report.brainModelResult && (
+                <div className="mt-6">
+                  <h3 className="text-lg font-semibold text-gray-800">
+                    Brain Tumor Segmentation
+                  </h3>
+
+                  <p className="mt-2 text-sm font-semibold">
+                    Status: {report.brainModelResult.status}
+                  </p>
+
+                  {report.brainModelResult.segmentedImage && (
+                    <div className="mt-4">
+                      <img
+                        src={`data:image/jpeg;base64,${report.brainModelResult.segmentedImage}`}
+                        alt="Brain Segmentation"
                         className="rounded-lg shadow max-w-full"
                       />
                     </div>
