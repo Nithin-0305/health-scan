@@ -10,6 +10,12 @@ const userSchema = new mongoose.Schema({
     enum: ["patient", "doctor", "admin"],
     default: "patient"
   },
+  isVerified: {
+  type: Boolean,
+  default: false
+},
+
+verificationToken: String,
   createdAt: { type: Date, default: Date.now }
 });
 

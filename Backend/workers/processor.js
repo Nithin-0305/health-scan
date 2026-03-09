@@ -8,6 +8,11 @@ import Report from "../models/Report.js";
 import { runVisionAnalysis } from "./visionWorker.js";
 import { generatePatientExplanation } from "../services/nlpService.js";
 import { runBrainSegmentation } from "../services/brainModelService.js";
+import { convert } from "pdf-poppler";
+
+// NEW: PDF text extraction library
+import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 jobQueue.on("process", async (jobId) => {
@@ -34,23 +39,63 @@ jobQueue.on("process", async (jobId) => {
       report.storedFilename
     );
 
+    const ext = path.extname(report.storedFilename).toLowerCase();
+
+    let extractedText = "";
+
     // =============================
-    // STEP 1: OCR (WEEK 3)
+    // STEP 1: OCR / PDF TEXT EXTRACTION
     // =============================
     job.progress = 30;
     await job.save();
 
-    let extractedText = "";
+    if (ext === ".pdf") {
 
-    try {
-      const ocrResult = await Tesseract.recognize(filePath, "eng", {
-        logger: (m) => console.log(m.status),
-      });
+      console.log("📄 PDF detected");
 
-      extractedText = ocrResult.data.text || "";
-    } catch (ocrErr) {
-      console.error("OCR error:", ocrErr);
-      extractedText = "";
+      const data = new Uint8Array(await fs.readFile(filePath));
+      const pdf = await pdfjs.getDocument({ data }).promise;
+
+      let textContent = "";
+
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        const strings = content.items.map((item) => item.str);
+        textContent += strings.join(" ") + "\n";
+      }
+
+      extractedText = textContent;
+
+      // Convert PDF pages → images
+      const outputDir = path.join(process.cwd(), "uploads", "pdf-images");
+
+      const options = {
+        format: "png",
+        out_dir: outputDir,
+        out_prefix: report._id.toString(),
+        page: null,
+      };
+
+      await convert(filePath, options);
+
+      console.log("📄 PDF pages converted to images");
+
+    } else {
+
+      // NORMAL IMAGE OCR
+      try {
+        const ocrResult = await Tesseract.recognize(filePath, "eng", {
+          logger: (m) => console.log(m.status),
+        });
+
+        extractedText = ocrResult.data.text || "";
+
+      } catch (ocrErr) {
+        console.error("OCR error:", ocrErr);
+        extractedText = "";
+      }
+
     }
 
     // Normalize text
@@ -68,8 +113,8 @@ jobQueue.on("process", async (jobId) => {
       findings: extractedText.match(/findings[:\-]\s*(.*)/i)?.[1] || "",
     };
 
-    // Save OCR results before vision
     report.extractedText = extractedText;
+    report.fullReportText = extractedText;
     report.ocrSections = sections;
     await report.save();
 
@@ -77,42 +122,52 @@ jobQueue.on("process", async (jobId) => {
     await job.save();
 
     // =============================
-    // STEP 3: VISION ANALYSIS (WEEK 4)
+    // STEP 3: VISION ANALYSIS
     // =============================
-    // if (report.type === "image") {
-    //   await runVisionAnalysis(report._id, filePath);
-    // }
+    if (ext === ".pdf") {
 
-    if (report.type === "image") {
+      const pdfImagesDir = path.join(process.cwd(), "uploads", "pdf-images");
 
-  await runVisionAnalysis(report._id, filePath);
+      const files = await fs.readdir(pdfImagesDir);
 
-  // Check if brain scan
-  const updatedReport = await Report.findById(report._id);
+      for (const file of files) {
 
-  if (
-    updatedReport.visionAnalysis?.observation
-      ?.toLowerCase()
-      .includes("brain")
-  ) {
-    await runBrainSegmentation(report._id, filePath);
-  }
-}
+        if (!file.startsWith(report._id.toString())) continue;
+
+        const imagePath = path.join(pdfImagesDir, file);
+
+        await runVisionAnalysis(report._id, imagePath);
+
+      }
+
+    } else if (report.type === "image") {
+
+      await runVisionAnalysis(report._id, filePath);
+
+      const updatedReport = await Report.findById(report._id);
+
+      if (
+        updatedReport.visionAnalysis?.observation
+          ?.toLowerCase()
+          .includes("brain")
+      ) {
+        await runBrainSegmentation(report._id, filePath);
+      }
+
+    }
 
     job.progress = 85;
     await job.save();
 
-    // 🔥 VERY IMPORTANT:
-    // Reload updated report AFTER vision analysis
     const updatedReport = await Report.findById(report._id);
 
     // =============================
-    // STEP 4: NLP EXPLANATION (WEEK 5)
+    // STEP 4: NLP EXPLANATION
     // =============================
     const explanation = await generatePatientExplanation(updatedReport);
 
     if (explanation) {
-      updatedReport.aiExplanation = explanation;
+      updatedReport.aiExplanation = { summaryForPatient: explanation };
       await updatedReport.save();
     }
 

@@ -73,7 +73,7 @@ export async function generatePatientExplanation(report) {
     });
 
     // =========================
-    // Include Brain Model Result (NEW)
+    // Include Brain Model Result (EXISTING)
     // =========================
     let brainSection = "";
 
@@ -84,51 +84,71 @@ Status: ${report.brainModelResult.status}
 `;
     }
 
+    // =========================
+    // NEW: FULL REPORT TEXT (FOR PDF SUPPORT)
+    // =========================
+    let fullReportSection = "";
+
+    if (report.fullReportText) {
+      fullReportSection = `
+FULL REPORT TEXT:
+${report.fullReportText.slice(0, 3000)}
+`;
+    }
+
+    // =========================
+// DATA VALIDATION (NEW)
+// =========================
+const hasOCR =
+  report.extractedText && report.extractedText.trim().length > 20;
+
+const hasVision =
+  report.visionAnalysis && report.visionAnalysis.observation;
+
+const hasBrainModel =
+  report.brainModelResult && report.brainModelResult.status;
+
+if (!hasOCR && !hasVision && !hasBrainModel) {
+  return {
+    summaryForPatient:
+      "The uploaded report could not be clearly analyzed. The document may be unclear, empty, or unsupported.",
+    riskLevel: "Unknown",
+    recommendedAction:
+      "Please upload a clearer medical report or consult a healthcare professional.",
+    disclaimer:
+      "This AI system is not a medical diagnosis. Please consult a qualified doctor.",
+  };
+}
+
     const prompt = `
-You are a medical AI assistant.
+You are a medical AI assistant helping patients understand their medical reports.
 
-Based on the following structured medical analysis, generate a patient-friendly explanation.
+${fullReportSection}
 
-VISION ANALYSIS:
+Report Context:
 Observation: ${report.visionAnalysis?.observation || "Not available"}
-Possible Interpretation: ${report.visionAnalysis?.possibleInterpretation || "Not available"}
+Interpretation: ${report.visionAnalysis?.possibleInterpretation || "Not available"}
 Severity: ${report.visionAnalysis?.severity || "Unknown"}
 
-OCR SECTIONS:
 Diagnosis: ${report.ocrSections?.diagnosis || "Not available"}
 Findings: ${report.ocrSections?.findings || "Not available"}
 Impression: ${report.ocrSections?.impression || "Not available"}
 
-${brainSection}
+Brain Model Result: ${report.brainModelResult?.status || "Not available"}
 
 Important rules:
-- If Brain Segmentation status says "Tumor Detected", riskLevel MUST be High.
-- If no tumor detected and severity is low, riskLevel should be Low.
-- Be clear, calm, and patient-friendly.
-- Do not sound alarming unless necessary.
-
-Return STRICT JSON in this format:
-
-{
-  "summaryForPatient": "...",
-  "riskLevel": "Low | Moderate | High",
-  "recommendedAction": "...",
-  "disclaimer": "This AI system is not a medical diagnosis. Please consult a qualified doctor."
-}
-
-Do not include anything outside JSON.
+- Explain the report in simple patient-friendly language.
+- Keep the summary short (maximum 4-5 sentences, if needed then you can give large summary if not covered in 3-4 sentences).
+- Be calm and clear.
+- Mention possible concerns if severity is high.
+- Suggest consulting a doctor for confirmation.
 `;
 
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const text = response.text();
 
-    // Remove markdown formatting if Gemini adds it
-    const cleaned = text.replace(/```json|```/g, "").trim();
-
-    const parsed = JSON.parse(cleaned);
-
-    return parsed;
+    return text;
 
   } catch (error) {
     console.error("NLP Generation Error:", error);

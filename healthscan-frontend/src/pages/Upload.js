@@ -373,7 +373,7 @@ useEffect(() => {
       if (data.report) {
         setReport(data.report);
         setStatus("completed");
-        setReportId(selectedReportId);   // 🔥 ADD THIS LINE
+        setReportId(selectedReportId);  
       }
 
     } catch (err) {
@@ -502,7 +502,7 @@ const sendMessage = async () => {
     )}
 
     {analysisStage >= 3 && (
-      <p className="animate-pulse">💡 Generating AI explanation...</p>
+      <p className="animate-pulse">💡 Generating explanation...</p>
     )}
 
     {analysisStage >= 4 && (
@@ -632,7 +632,7 @@ const sendMessage = async () => {
                 <div className="mt-8 border-t pt-6">
 
                   <h3 className="text-xl font-semibold text-gray-800 mb-4">
-                    AI Medical Explanation
+                     Medical Explanation
                   </h3>
 
                   {/* Risk Badge */}
@@ -671,9 +671,9 @@ const sendMessage = async () => {
                   </div>
 
                   {/* Disclaimer */}
-                  <div className="text-xs text-gray-500 border-t pt-3">
+                  {/* <div className="text-xs text-gray-500 border-t pt-3">
                     ⚠ {report.aiExplanation.disclaimer}
-                  </div>
+                  </div> */}
 
                 </div>
               )}

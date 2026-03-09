@@ -14,11 +14,14 @@ const REGION_MAP = {
 };
 
 export async function runVisionAnalysis(reportId, filePath) {
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-    console.log("GEMINI KEY LOADED:", process.env.GEMINI_API_KEY);
-console.log("KEY LENGTH:", process.env.GEMINI_API_KEY?.length);
+  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+  console.log("GEMINI KEY LOADED:", process.env.GEMINI_API_KEY);
+  console.log("KEY LENGTH:", process.env.GEMINI_API_KEY?.length);
+
   try {
+
     const model = genAI.getGenerativeModel({
       model: "gemini-2.5-flash"
     });
@@ -49,125 +52,193 @@ Rules:
 - boundingBox must be relative to image size (percentage, 0 to 1)
 - x and y represent top-left corner of abnormal region
 - width and height represent abnormal region size
-- If no clear abnormality, set suspectedRegion to "no-clear-region" and boundingBox to null
+- If the image is NOT a medical scan, set suspectedRegion = "no-clear-region" and boundingBox = null
+- If no clear abnormality exists, set suspectedRegion = "no-clear-region"
 - Do not return anything outside JSON
 `;
 
-const result = await model.generateContent([
-  prompt,
-  {
-    inlineData: {
-      mimeType: "image/jpeg",
-      data: imageBuffer.toString("base64")
+    const result = await model.generateContent([
+      prompt,
+      {
+        inlineData: {
+          mimeType: "image/jpeg",
+          data: imageBuffer.toString("base64")
+        }
+      }
+    ]);
+
+    let text = result.response.text().trim();
+
+    // Remove markdown formatting
+    if (text.startsWith("```")) {
+      text = text.replace(/```json/g, "").replace(/```/g, "").trim();
     }
-  }
-]);
-
-let text = result.response.text().trim();
-
-// Remove markdown code blocks if present
-if (text.startsWith("```")) {
-  text = text
-    .replace(/```json/g, "")
-    .replace(/```/g, "")
-    .trim();
-}
 
     const parsed = JSON.parse(text);
 
-// Safety
-if (!parsed.boundingBox) {
-  parsed.boundingBox = null;
-}
+    // Safety
+    if (!parsed.boundingBox) {
+      parsed.boundingBox = null;
+    }
 
-let highlightedPath = null;
+    // ===================================
+    // NEW: Detect if image is medical
+    // ===================================
+    const observation = (parsed.observation || "").toLowerCase();
 
-const image = sharp(filePath);
-const metadata = await image.metadata();
+    const isMedicalScan =
+      observation.includes("x-ray") ||
+      observation.includes("mri") ||
+      observation.includes("scan") ||
+      observation.includes("fracture") ||
+      observation.includes("tumor") ||
+      observation.includes("lesion") ||
+      observation.includes("lung") ||
+      observation.includes("bone") ||
+      observation.includes("brain");
 
-const imageWidth = metadata.width;
-const imageHeight = metadata.height;
+    if (!isMedicalScan) {
 
-let centerX = null;
-let centerY = null;
-let radius = null;
+      console.log("⚠️ Not a medical scan. Skipping highlight.");
 
-// ===================================
-// 1️⃣ PRIORITY: Use boundingBox
-// ===================================
-if (
-  parsed.boundingBox &&
-  typeof parsed.boundingBox.x === "number" &&
-  typeof parsed.boundingBox.y === "number" &&
-  typeof parsed.boundingBox.width === "number" &&
-  typeof parsed.boundingBox.height === "number"
-) {
-  const { x, y, width, height } = parsed.boundingBox;
+      await Report.findByIdAndUpdate(reportId, {
+        visionAnalysis: parsed,
+        highlightedImage: null
+      });
 
-  const boxX = x * imageWidth;
-  const boxY = y * imageHeight;
-  const boxW = width * imageWidth;
-  const boxH = height * imageHeight;
+      return;
+    }
 
-  centerX = boxX + boxW / 2;
-  centerY = boxY + boxH / 2;
+    let highlightedPath = null;
 
-  // Smaller precise circle
-  radius = Math.min(boxW, boxH) / 2;
-}
+    const image = sharp(filePath);
+    const metadata = await image.metadata();
 
-// ===================================
-// 2️⃣ FALLBACK: Use REGION_MAP
-// ===================================
-else if (
-  parsed.suspectedRegion &&
-  parsed.suspectedRegion !== "no-clear-region" &&
-  REGION_MAP[parsed.suspectedRegion]
-) {
-  centerX = imageWidth * REGION_MAP[parsed.suspectedRegion].x;
-  centerY = imageHeight * REGION_MAP[parsed.suspectedRegion].y;
+    const imageWidth = metadata.width;
+    const imageHeight = metadata.height;
 
-  radius = Math.min(imageWidth, imageHeight) * 0.12;
-}
+    let centerX = null;
+    let centerY = null;
+    let radius = null;
 
-// ===================================
-// DRAW CIRCLE IF WE HAVE LOCATION
-// ===================================
-if (centerX && centerY && radius) {
+    // ===================================
+    // 1️⃣ PRIORITY: Use boundingBox
+    // ===================================
+    if (
+      parsed.boundingBox &&
+      typeof parsed.boundingBox.x === "number" &&
+      typeof parsed.boundingBox.y === "number" &&
+      typeof parsed.boundingBox.width === "number" &&
+      typeof parsed.boundingBox.height === "number"
+    ) {
 
-  const svgCircle = `
-    <svg width="${imageWidth}" height="${imageHeight}">
-      <circle 
-        cx="${centerX}" 
-        cy="${centerY}" 
-        r="${radius}" 
-        fill="none" 
-        stroke="red" 
-        stroke-width="4"/>
-    </svg>
-  `;
+      const { x, y, width, height } = parsed.boundingBox;
 
-  const outputDir = path.join(process.cwd(), "uploads", "highlighted");
+      const boxX = x * imageWidth;
+      const boxY = y * imageHeight;
+      const boxW = width * imageWidth;
+      const boxH = height * imageHeight;
 
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
-  }
+      centerX = boxX + boxW / 2;
+      centerY = boxY + boxH / 2;
 
-  highlightedPath = path.join(
-    "uploads",
-    "highlighted",
-    `${reportId}_highlighted.jpg`
-  );
+      radius = Math.min(boxW, boxH) / 2;
+    }
 
-  await image
-    .composite([{ input: Buffer.from(svgCircle), top: 0, left: 0 }])
-    .toFile(path.join(process.cwd(), highlightedPath));
-}
+    // ===================================
+    // 2️⃣ FALLBACK: REGION MAP
+    // ===================================
+    else if (
+      parsed.suspectedRegion &&
+      parsed.suspectedRegion !== "no-clear-region"
+    ) {
 
-await Report.findByIdAndUpdate(reportId, {
-  visionAnalysis: parsed,
-  highlightedImage: highlightedPath
-});
+      const region = parsed.suspectedRegion;
+
+      let boxX = 0;
+      let boxY = 0;
+      let boxW = imageWidth / 2;
+      let boxH = imageHeight / 2;
+
+      if (region === "upper-left") {
+        boxX = 0;
+        boxY = 0;
+      }
+
+      else if (region === "upper-right") {
+        boxX = imageWidth / 2;
+        boxY = 0;
+      }
+
+      else if (region === "center") {
+        boxX = imageWidth / 4;
+        boxY = imageHeight / 4;
+        boxW = imageWidth / 2;
+        boxH = imageHeight / 2;
+      }
+
+      else if (region === "lower-left") {
+        boxX = 0;
+        boxY = imageHeight / 2;
+      }
+
+      else if (region === "lower-right") {
+        boxX = imageWidth / 2;
+        boxY = imageHeight / 2;
+      }
+
+      else if (region === "diffuse") {
+        boxX = imageWidth / 4;
+        boxY = imageHeight / 4;
+        boxW = imageWidth / 2;
+        boxH = imageHeight / 2;
+      }
+
+      centerX = boxX + boxW / 2;
+      centerY = boxY + boxH / 2;
+
+      radius = Math.min(boxW, boxH) * 0.3;
+    }
+
+    // ===================================
+    // DRAW CIRCLE
+    // ===================================
+    if (centerX !== null && centerY !== null && radius !== null) {
+
+      const svgCircle = `
+      <svg width="${imageWidth}" height="${imageHeight}">
+        <circle 
+          cx="${centerX}" 
+          cy="${centerY}" 
+          r="${radius}" 
+          fill="none" 
+          stroke="red" 
+          stroke-width="4"/>
+      </svg>
+      `;
+
+      const outputDir = path.join(process.cwd(), "uploads", "highlighted");
+
+      if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+      }
+
+      highlightedPath = path.join(
+        "uploads",
+        "highlighted",
+        `${reportId}_highlighted.jpg`
+      );
+
+      await image
+        .composite([{ input: Buffer.from(svgCircle), top: 0, left: 0 }])
+        .toFile(path.join(process.cwd(), highlightedPath));
+    }
+
+    await Report.findByIdAndUpdate(reportId, {
+      visionAnalysis: parsed,
+      highlightedImage: highlightedPath
+    });
+
     console.log("Vision analysis completed:", reportId);
 
   } catch (err) {
